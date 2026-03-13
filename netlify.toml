@@ -1,0 +1,56 @@
+[build]
+  publish = "public"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "18"
+
+# ── API rewrites → Netlify Functions ─────────────────────────────────────────
+
+[[redirects]]
+  from   = "/api/spotify/track/:id"
+  to     = "/.netlify/functions/spotify-track?spotifyId=:id"
+  status = 200
+  force  = true
+
+[[redirects]]
+  from   = "/api/resolve/:id"
+  to     = "/.netlify/functions/resolve?spotifyId=:id"
+  status = 200
+  force  = true
+
+[[redirects]]
+  from   = "/api/tidal-info/:id"
+  to     = "/.netlify/functions/tidal-info?tidalId=:id"
+  status = 200
+  force  = true
+
+[[redirects]]
+  from   = "/api/recommendations/:id"
+  to     = "/.netlify/functions/recommendations?tidalId=:id"
+  status = 200
+  force  = true
+
+[[redirects]]
+  from   = "/api/stream-info/:id"
+  to     = "/.netlify/functions/stream-info?tidalId=:id"
+  status = 200
+  force  = true
+
+[[redirects]]
+  from   = "/api/audio/:id"
+  to     = "/.netlify/functions/audio?tidalId=:id"
+  status = 200
+  force  = true
+
+[[redirects]]
+  from   = "/api/segment"
+  to     = "/.netlify/functions/segment"
+  status = 200
+  force  = true
+
+# SPA fallback — serve index.html for all other routes
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200

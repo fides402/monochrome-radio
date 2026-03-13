@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monochrome Radio</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+
+    <!-- ── Header ─────────────────────────────────────────────────────── -->
+    <header class="header">
+      <a class="logo" href="#">
+        <!-- Monochrome / radio logo -->
+        <svg viewBox="0 0 32 32">
+          <circle cx="16" cy="16" r="15" fill="none" stroke="currentColor" stroke-width="2"/>
+          <circle cx="16" cy="16" r="6" fill="currentColor"/>
+          <path d="M8 5.5 A13 13 0 0 1 24 5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M4.5 10 A15 15 0 0 1 27.5 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span class="logo-text">Monochrome Radio</span>
+      </a>
+
+      <div class="search-bar">
+        <div class="search-input-wrap">
+          <!-- Search icon -->
+          <svg viewBox="0 0 24 24">
+            <path d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+          </svg>
+          <input
+            id="search-input"
+            class="search-input"
+            type="text"
+            placeholder="Paste a Spotify track link…"
+            autocomplete="off"
+            spellcheck="false"
+          >
+        </div>
+        <button id="search-btn" class="search-btn">Play Radio</button>
+      </div>
+    </header>
+
+    <!-- ── Main content ────────────────────────────────────────────────── -->
+    <main class="main">
+
+      <!-- Now playing -->
+      <section class="now-playing">
+
+        <!-- Empty state -->
+        <div id="np-empty" class="np-empty">
+          <div class="big-icon">📻</div>
+          <h2>Start a Radio</h2>
+          <p>Paste any Spotify track link above and we'll build a live radio of similar tracks — streamed in HiFi via Monochrome.</p>
+        </div>
+
+        <!-- Active state -->
+        <div id="np-content" class="np-content">
+          <div class="np-art-wrap">
+            <img id="np-art" class="np-art" src="" alt="Album art" style="display:none">
+            <div id="np-art-placeholder" class="np-art-placeholder">♪</div>
+            <!-- Loading ring -->
+            <div id="np-spinner" class="np-spinning-indicator" style="display:none"></div>
+          </div>
+
+          <div class="np-meta">
+            <div id="np-title"  class="np-title">—</div>
+            <div id="np-artist" class="np-artist">—</div>
+            <div id="np-album"  class="np-album"></div>
+            <div class="np-badges">
+              <span id="np-quality" class="badge badge-quality" style="display:none">—</span>
+              <span class="badge badge-source">Tidal via Monochrome</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Radio queue sidebar -->
+      <aside class="queue">
+        <div class="queue-header">
+          <div id="queue-title"    class="queue-title">Radio Queue</div>
+          <div id="queue-subtitle" class="queue-subtitle">Paste a Spotify link to start</div>
+        </div>
+        <div id="queue-list" class="queue-list">
+          <!-- Populated by JS -->
+        </div>
+      </aside>
+
+    </main>
+
+    <!-- ── Player bar ───────────────────────────────────────────────────── -->
+    <footer class="player">
+
+      <!-- Left: current track info -->
+      <div class="player-left">
+        <img      id="player-thumb" class="player-thumb" src="" alt="" style="display:none">
+        <div      id="player-thumb-placeholder" class="player-thumb-placeholder">♪</div>
+        <div class="player-track-info">
+          <div id="player-title"  class="player-title">—</div>
+          <div id="player-artist" class="player-artist">—</div>
+        </div>
+        <button id="player-heart" class="player-heart" title="Like">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
+            <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Center: controls + progress -->
+      <div class="player-center">
+        <div class="player-controls">
+
+          <!-- Shuffle -->
+          <button id="shuffle-btn" class="ctrl-btn" title="Shuffle">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+              <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/>
+            </svg>
+          </button>
+
+          <!-- Prev -->
+          <button id="prev-btn" class="ctrl-btn" title="Previous">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+              <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/>
+            </svg>
+          </button>
+
+          <!-- Play/Pause -->
+          <button id="play-btn" class="play-btn" title="Play / Pause" disabled>
+            <!-- Icon set by JS -->
+            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+              <polygon points="5,3 19,12 5,21"/>
+            </svg>
+          </button>
+
+          <!-- Next -->
+          <button id="next-btn" class="ctrl-btn" title="Next">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+              <path d="M6 18l8.5-6L6 6v12zm2-8.14L11.03 12 8 14.14V9.86zM16 6h2v12h-2z"/>
+            </svg>
+          </button>
+
+          <!-- Repeat -->
+          <button id="repeat-btn" class="ctrl-btn" title="Repeat">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+              <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Progress -->
+        <div class="player-progress">
+          <span id="time-cur"   class="time">0:00</span>
+          <div  id="progress-track" class="progress-track">
+            <div id="progress-fill"  class="progress-fill"></div>
+            <div id="progress-thumb" class="progress-thumb"></div>
+          </div>
+          <span id="time-total" class="time right">0:00</span>
+        </div>
+      </div>
+
+      <!-- Right: volume -->
+      <div class="player-right">
+        <div class="volume-wrap">
+          <button id="vol-btn" class="vol-btn" title="Mute / Unmute">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+              <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+            </svg>
+          </button>
+          <div id="volume-track" class="volume-track">
+            <div id="volume-fill" class="volume-fill"></div>
+            <div class="vol-thumb"></div>
+          </div>
+        </div>
+      </div>
+
+    </footer>
+  </div>
+
+  <!-- Toast notification -->
+  <div id="toast" class="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
