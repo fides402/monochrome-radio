@@ -189,14 +189,28 @@ exports.handler = async (event) => {
     await new Promise(r => setTimeout(r, 800));
     const pl2 = await pandoraPost('station.getPlaylist', { ...playlistBody, syncTime: syncNow(session) }, params, true);
 
-    // Log raw item count for debugging
-    console.log('[pandora] pl1 items:', (pl1.items||[]).length, 'pl2 items:', (pl2.items||[]).length);
-
     const allItems = [...(pl1.items || []), ...(pl2.items || [])];
-    const tracks   = allItems.filter(t => t.songTitle && t.artistName).map(t => ({
-      artist: t.artistName, title: t.songTitle,
-      album: t.albumName || null, albumArt: t.albumArtUrl || null, duration: t.trackLength || null,
-    }));
+    console.log('[pandora] total items:', allItems.length, 'first:', JSON.stringify(allItems[0]).slice(0,200));
+
+    // Try multiple known field name variants
+    const tracks = allItems
+      .filter(t => (t.songTitle || t.title || t.song_title) && (t.artistName || t.artist || t.artist_name))
+      .map(t => ({
+        artist:   t.artistName  || t.artist     || t.artist_name,
+        title:    t.songTitle   || t.title       || t.song_title,
+        album:    t.albumName   || t.album       || null,
+        albumArt: t.albumArtUrl || t.albumArtUrl || null,
+        duration: t.trackLength || t.duration    || null,
+      }));
+
+    // If still nothing, return raw debug info
+    if (tracks.length === 0 && allItems.length > 0) {
+      const sample = allItems[0];
+      return { statusCode: 200, headers: CORS, body: JSON.stringify({
+        stationName: station.stationName, tracks: [],
+        _debug: { keys: Object.keys(sample), sample: JSON.stringify(sample).slice(0, 500) }
+      })};
+    }
 
     const seen = new Set();
     const unique = tracks.filter(t => {
