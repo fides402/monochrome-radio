@@ -307,6 +307,70 @@ app.get('/api/tidal-search', async (req, res) => {
   }
 });
 
+// ── Diagnostic test endpoint ──────────────────────────────────────────────────
+app.get('/api/test', async (req, res) => {
+  const results = {};
+
+  // 1. Spotify token
+  try {
+    const token = await getSpotifyToken();
+    results.spotify_token = { ok: true, token: token.slice(0, 10) + '…' };
+  } catch (e) {
+    results.spotify_token = { ok: false, error: e.response?.data || e.message };
+  }
+
+  // 2. Spotify track lookup (test with a well-known track)
+  const TEST_SPOTIFY_ID = '4iV5W9uYEdYUVa79Axb7Rh'; // Shape of You
+  if (results.spotify_token.ok) {
+    try {
+      const token = await getSpotifyToken();
+      const r = await axios.get(`https://api.spotify.com/v1/tracks/${TEST_SPOTIFY_ID}`,
+        { headers: { Authorization: `Bearer ${token}` }, timeout: 8000 });
+      results.spotify_track = { ok: true, name: r.data.name, artist: r.data.artists?.[0]?.name };
+    } catch (e) {
+      results.spotify_track = { ok: false, error: e.response?.data || e.message };
+    }
+  } else {
+    results.spotify_track = { ok: false, error: 'Skipped — token failed' };
+  }
+
+  // 3. song.link (odesli)
+  try {
+    const r = await axios.get(
+      `https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent('spotify:track:' + TEST_SPOTIFY_ID)}`,
+      { headers: { 'User-Agent': 'MonochromeRadio/1.0' }, timeout: 15000 });
+    const tidal = r.data.linksByPlatform?.tidal?.url;
+    results.songlink = { ok: !!tidal, tidalUrl: tidal || '(not found on Tidal)' };
+  } catch (e) {
+    results.songlink = { ok: false, error: e.message };
+  }
+
+  // 4. monochrome.tf
+  try {
+    const r = await axios.get(`${MONO_BASE}/info/?id=64975005`, { timeout: 8000 });
+    results.monochrome = { ok: true, title: r.data?.data?.title || r.data?.title };
+  } catch (e) {
+    results.monochrome = { ok: false, error: e.message };
+  }
+
+  // 5. Pandora
+  const email    = process.env.PANDORA_EMAIL;
+  const password = process.env.PANDORA_PASSWORD;
+  if (email && password) {
+    try {
+      await createPandoraSession(email, password);
+      results.pandora = { ok: true };
+    } catch (e) {
+      results.pandora = { ok: false, error: e.message };
+    }
+  } else {
+    results.pandora = { ok: false, error: 'PANDORA_EMAIL / PANDORA_PASSWORD not set' };
+  }
+
+  console.log('\n[/api/test]', JSON.stringify(results, null, 2));
+  res.json(results);
+});
+
 // ── Generic URL proxy (for DASH segments and fallback audio) ──────────────────
 app.get('/api/segment', async (req, res) => {
   const { url } = req.query;

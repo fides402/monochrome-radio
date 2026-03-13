@@ -327,9 +327,12 @@ async function buildPandoraRadio(spotifyId) {
   } else {
     // Spotify failed — resolve via song.link first to at least get Tidal ID,
     // then pull title/artist from Tidal metadata
-    showToast('Spotify unavailable, using song.link…');
+    showToast('Spotify unavailable, trying song.link…');
     const resolveResp = await fetch(`/api/resolve/${spotifyId}`);
-    if (!resolveResp.ok) throw new Error('Track not found — check the Spotify link');
+    if (!resolveResp.ok) {
+      const e = await resolveResp.json().catch(() => ({}));
+      throw new Error(e.error || 'Track not found on Tidal via song.link');
+    }
     const { tidalId } = await resolveResp.json();
     const infoResp = await fetch(`/api/tidal-info/${tidalId}`);
     const info = infoResp.ok ? await infoResp.json() : {};
