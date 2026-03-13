@@ -185,8 +185,10 @@ audio.addEventListener('ended', () => {
   }
 });
 audio.addEventListener('error', e => {
-  console.error('[Audio error]', audio.error);
-  showToast('Audio error — skipping…', true);
+  const err = audio.error;
+  const codes = ['', 'ABORTED', 'NETWORK', 'DECODE', 'SRC_NOT_SUPPORTED'];
+  console.error('[Audio error]', err?.code, codes[err?.code], err?.message, audio.src);
+  showToast(`Audio error (${codes[err?.code] || err?.code}) — skipping…`, true);
   setTimeout(playNext, 1500);
 });
 
@@ -515,8 +517,8 @@ async function playQueueItem(index) {
     updatePlayerUI();
 
     if (info.type === 'direct') {
-      // Use our audio proxy endpoint for CORS-safe streaming
-      audio.src = `/api/audio/${track.tidalId}`;
+      // Use URL directly from stream-info (avoids a second round-trip)
+      audio.src = info.url;
       audio.load();
       await audio.play();
     } else if (info.type === 'dash') {
