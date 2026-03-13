@@ -1,6 +1,7 @@
 const express = require('express');
 const axios   = require('axios');
 const path    = require('path');
+const crypto  = require('crypto');
 
 const app = express();
 app.use(express.json());
@@ -12,6 +13,59 @@ const SPOTIFY_CLIENT_ID     = '5d04043e27d04cee91b233ab4e7791fc';
 const SPOTIFY_CLIENT_SECRET = '14dce712909a4311986a2c86dfae9848';
 const MONO_BASE             = 'https://api.monochrome.tf';
 const QUALITY_CHAIN         = ['HI_RES_LOSSLESS', 'LOSSLESS', 'HIGH', 'LOW'];
+
+// ── Pandora partner credentials ───────────────────────────────────────────────
+const PANDORA_PARTNER = {
+  username:   'android',
+  password:   'AC7IBG09A3DTSYM4R41UJWL07VLN8JI7',
+  device:     'android-generic',
+  version:    '5',
+  decryptKey: 'R=U!LH$O2B#',
+  encryptKey: '6#26FRL$ZWD',
+};
+const PANDORA_API = 'https://tuner.pandora.com/services/json/';
+
+function bfDecrypt(hexStr, key) {
+  const d = crypto.createDecipheriv('bf-ecb', Buffer.from(key), Buffer.alloc(0));
+  d.setAutoPadding(false);
+  return Buffer.concat([d.update(Buffer.from(hexStr, 'hex')), d.final()])
+    .toString('utf8').replace(/\0/g, '');
+}
+function bfEncrypt(str, key) {
+  const pad = (8 - (str.length % 8)) % 8;
+  const c = crypto.createCipheriv('bf-ecb', Buffer.from(key), Buffer.alloc(0));
+  c.setAutoPadding(false);
+  return Buffer.concat([c.update(Buffer.from(str + '\0'.repeat(pad), 'utf8')), c.final()])
+    .toString('hex');
+}
+async function pandoraPost(method, body, params = {}, encrypt = false) {
+  const bodyStr = JSON.stringify(body);
+  const payload = encrypt ? bfEncrypt(bodyStr, PANDORA_PARTNER.encryptKey) : bodyStr;
+  const resp = await axios.post(`${PANDORA_API}?method=${method}`, payload, {
+    params,
+    headers: { 'Content-Type': 'text/plain', 'User-Agent': 'Pandora/8.4 (Linux; Android 8.1)' },
+    timeout: 20000,
+  });
+  if (resp.data.stat !== 'ok') throw new Error(resp.data.message || `Pandora [${resp.data.code}]`);
+  return resp.data.result;
+}
+async function createPandoraSession(email, password) {
+  const partner    = await pandoraPost('auth.partnerLogin', {
+    username: PANDORA_PARTNER.username, password: PANDORA_PARTNER.password,
+    deviceModel: PANDORA_PARTNER.device, version: PANDORA_PARTNER.version, includeUrls: true,
+  });
+  const serverTime = parseInt(bfDecrypt(partner.syncTime, PANDORA_PARTNER.decryptKey).slice(4), 10);
+  const timeOffset = Math.floor(Date.now() / 1000) - serverTime;
+  const user = await pandoraPost('auth.userLogin', {
+    loginType: 'user', username: email, password,
+    partnerAuthToken: partner.partnerAuthToken,
+    syncTime: Math.floor(Date.now() / 1000) - timeOffset,
+  }, { partner_id: partner.partnerId, auth_token: partner.partnerAuthToken }, true);
+  return { partnerId: partner.partnerId, partnerToken: partner.partnerAuthToken,
+           userId: user.userId, userToken: user.userAuthToken, timeOffset };
+}
+const pandoraAuthParams = s => ({ partner_id: s.partnerId, user_id: s.userId, auth_token: s.userToken });
+const pandoraSyncNow    = s => Math.floor(Date.now() / 1000) - s.timeOffset;
 
 // ── Spotify token cache ───────────────────────────────────────────────────────
 let cachedToken  = null;
@@ -176,6 +230,78 @@ app.get('/api/audio/:tidalId', async (req, res) => {
     upstream.data.pipe(res);
   } catch (e) {
     if (!res.headersSent) res.status(502).json({ error: e.message });
+  }
+});
+
+// ── Pandora radio ─────────────────────────────────────────────────────────────
+app.get('/api/pandora-radio', async (req, res) => {
+  const { artist, title } = req.query;
+  if (!artist || !title) return res.status(400).json({ error: 'Missing artist or title' });
+  const email    = process.env.PANDORA_EMAIL;
+  const password = process.env.PANDORA_PASSWORD;
+  if (!email || !password) return res.status(500).json({ error: 'Pandora credentials not set in env (PANDORA_EMAIL / PANDORA_PASSWORD)' });
+  try {
+    const session = await createPandoraSession(email, password);
+    const params  = pandoraAuthParams(session);
+    const search  = await pandoraPost('music.search', {
+      searchText: `${artist} ${title}`, includeNearMatches: true, includeGenreStations: false,
+      userAuthToken: session.userToken, syncTime: pandoraSyncNow(session),
+    }, params, true);
+    const song = (search.songs || [])[0];
+    if (!song) return res.status(404).json({ error: 'Track not found on Pandora' });
+    const station = await pandoraPost('station.createStation', {
+      musicType: 'song', musicToken: song.musicToken,
+      userAuthToken: session.userToken, syncTime: pandoraSyncNow(session),
+    }, params, true);
+    const plBody = { stationToken: station.stationToken, includeTrackLength: true, userAuthToken: session.userToken };
+    const [pl1, pl2] = await Promise.all([
+      pandoraPost('station.getPlaylist', { ...plBody, syncTime: pandoraSyncNow(session) }, params, true),
+      pandoraPost('station.getPlaylist', { ...plBody, syncTime: pandoraSyncNow(session) }, params, true),
+    ]);
+    const seen  = new Set();
+    const tracks = [...(pl1.items || []), ...(pl2.items || [])]
+      .filter(t => t.songTitle && t.artistName)
+      .map(t => ({ artist: t.artistName, title: t.songTitle, album: t.albumName || null, albumArt: t.albumArtUrl || null, duration: t.trackLength || null }))
+      .filter(t => { const k = `${t.artist}|${t.title}`.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+    res.json({ stationName: station.stationName, tracks });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Tidal search (artist+title → Tidal ID via Spotify + song.link) ────────────
+app.get('/api/tidal-search', async (req, res) => {
+  const { artist, title } = req.query;
+  if (!artist || !title) return res.status(400).json({ error: 'Missing artist or title' });
+  try {
+    const token  = await getSpotifyToken();
+    const q      = encodeURIComponent(`track:${title} artist:${artist}`);
+    const search = await axios.get(`https://api.spotify.com/v1/search?q=${q}&type=track&limit=1`,
+      { headers: { Authorization: `Bearer ${token}` }, timeout: 8000 });
+    const sp = search.data?.tracks?.items?.[0];
+    if (!sp) return res.status(404).json({ error: 'Not found on Spotify' });
+    const odesli = await axios.get(
+      `https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent('spotify:track:' + sp.id)}`,
+      { headers: { 'User-Agent': 'MonochromeRadio/1.0' }, timeout: 15000 });
+    const d   = odesli.data;
+    const key = Object.keys(d.entitiesByUniqueId || {}).find(k => k.startsWith('TIDAL_SONG::'));
+    let tidalId = key ? parseInt(key.split('::')[1], 10) : null;
+    if (!tidalId) { const m = (d.linksByPlatform?.tidal?.url || '').match(/\/track\/(\d+)/); if (m) tidalId = parseInt(m[1], 10); }
+    if (!tidalId) return res.status(404).json({ error: 'Not found on Tidal' });
+    let albumArt = sp.album?.images?.[0]?.url || null;
+    let album    = sp.album?.name || '';
+    let duration = sp.duration_ms ? Math.round(sp.duration_ms / 1000) : null;
+    try {
+      const info = await axios.get(`${MONO_BASE}/info/?id=${tidalId}`, { timeout: 8000 });
+      const m = info.data?.data || info.data;
+      const cover = m?.album?.cover || m?.cover;
+      if (cover) albumArt = `https://resources.tidal.com/images/${cover.replace(/-/g,'/')}/${640}x${640}.jpg`;
+      if (m?.album?.title) album    = m.album.title;
+      if (m?.duration)     duration = m.duration;
+    } catch (_) {}
+    res.json({ tidalId, spotifyId: sp.id, title: sp.name, artist: sp.artists?.map(a => a.name).join(', ') || artist, album, albumArt, duration });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 

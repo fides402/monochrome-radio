@@ -49,6 +49,18 @@
   status = 200
   force  = true
 
+[[redirects]]
+  from   = "/api/pandora-radio"
+  to     = "/.netlify/functions/pandora-radio"
+  status = 200
+  force  = true
+
+[[redirects]]
+  from   = "/api/tidal-search"
+  to     = "/.netlify/functions/tidal-search"
+  status = 200
+  force  = true
+
 # SPA fallback — serve index.html for all other routes
 [[redirects]]
   from   = "/*"

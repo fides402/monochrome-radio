@@ -1,6 +1,6 @@
 /* ══════════════════════════════════════════════════════════════════════
    Monochrome Radio — Frontend
-   Flow: Spotify URL → Tidal ID (odesli) → monochrome.tf radio + stream
+   Flow: Spotify URL → Pandora station → artist+title → Tidal IDs → stream
    ══════════════════════════════════════════════════════════════════════ */
 
 // ── Tidal cover helper ────────────────────────────────────────────────────────
@@ -299,6 +299,78 @@ function parseSpotifyId(input) {
   return null;
 }
 
+// ── Resolve artist+title → Tidal track object (via /api/tidal-search) ────────
+async function resolveToTidal(artist, title) {
+  const params = new URLSearchParams({ artist, title });
+  const r = await fetch(`/api/tidal-search?${params}`);
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    throw new Error(e.error || `Not found on Tidal: ${artist} — ${title}`);
+  }
+  return r.json(); // { tidalId, title, artist, album, albumArt, duration }
+}
+
+// ── Build Pandora radio queue from a Spotify track ────────────────────────────
+async function buildPandoraRadio(spotifyId) {
+  // 1. Fetch Spotify metadata (title + artist needed for Pandora search)
+  showToast('Getting track info…');
+  const metaResp = await fetch(`/api/spotify/track/${spotifyId}`);
+  if (!metaResp.ok) throw new Error('Could not fetch Spotify track info');
+  const meta = await metaResp.json();
+  if (meta.error) throw new Error(meta.error.message || 'Spotify error');
+
+  const artist = meta.artists?.map(a => a.name).join(', ') || '—';
+  const title  = meta.name || '—';
+
+  // 2. Resolve seed track to Tidal
+  showToast('Finding on Tidal…');
+  let seedTrack;
+  try {
+    seedTrack = await resolveToTidal(artist, title);
+  } catch (_) {
+    // Fallback: use Spotify art + try song.link directly
+    const resolveResp = await fetch(`/api/resolve/${spotifyId}`);
+    if (!resolveResp.ok) throw new Error('Track not found on Tidal');
+    const { tidalId } = await resolveResp.json();
+    seedTrack = {
+      tidalId,
+      title,
+      artist,
+      albumArt: meta.album?.images?.[0]?.url || null,
+      album:    meta.album?.name || '',
+      duration: meta.duration_ms ? Math.round(meta.duration_ms / 1000) : null,
+    };
+  }
+
+  // 3. Ask Pandora for similar tracks
+  showToast('Building Pandora radio…');
+  const pandoraParams = new URLSearchParams({ artist, title });
+  const pandoraResp   = await fetch(`/api/pandora-radio?${pandoraParams}`);
+  if (!pandoraResp.ok) {
+    const e = await pandoraResp.json().catch(() => ({}));
+    throw new Error(e.error || 'Pandora radio failed');
+  }
+  const pandoraData = await pandoraResp.json();
+  const stationName = pandoraData.stationName || `${title} Radio`;
+
+  // 4. Resolve each Pandora track to Tidal (parallel, best-effort)
+  showToast(`Resolving ${pandoraData.tracks.length} tracks on Tidal…`);
+  const resolved = await Promise.allSettled(
+    pandoraData.tracks.map(t => resolveToTidal(t.artist, t.title))
+  );
+
+  const recTracks = resolved
+    .map((r, i) => {
+      if (r.status === 'fulfilled') return r.value;
+      // Fallback: keep Pandora metadata, tidalId will be resolved on play
+      const t = pandoraData.tracks[i];
+      return { tidalId: null, title: t.title, artist: t.artist, albumArt: t.albumArt, album: t.album, duration: t.duration, _needsResolve: true };
+    })
+    .filter(t => t.tidalId !== null || t._needsResolve);
+
+  return { seedTrack, recTracks, stationName };
+}
+
 // ── Load Spotify URL (main entry point) ───────────────────────────────────────
 async function loadSpotifyUrl() {
   const raw = el.searchInput.value.trim();
@@ -311,74 +383,14 @@ async function loadSpotifyUrl() {
   }
 
   setLoadingState(true);
-  showToast('Resolving track…');
-
   try {
-    // 1. Resolve Spotify → Tidal ID via song.link
-    showToast('Finding on Tidal…');
-    const resolveResp = await fetch(`/api/resolve/${spotifyId}`);
-    if (!resolveResp.ok) {
-      const err = await resolveResp.json().catch(() => ({}));
-      throw new Error(err.error || 'Track not found on Tidal — try a different song');
-    }
-    const { tidalId } = await resolveResp.json();
-
-    // 2. Get metadata from Tidal (primary source)
-    showToast('Loading track info…');
-    let seedTrack = { tidalId, title: '—', artist: '—', albumArt: null, album: '—' };
-    try {
-      const infoResp = await fetch(`/api/tidal-info/${tidalId}`);
-      if (infoResp.ok) {
-        const info = await infoResp.json();
-        const d    = info.data || info;
-        const artURL = tidalCoverUrl(d.album?.cover || d.cover, 640);
-        const artists = d.artists || (d.artist ? [d.artist] : []);
-        const artistStr = Array.isArray(artists)
-          ? artists.map(a => a.name || a).join(', ')
-          : (d.artist?.name || '—');
-        seedTrack = {
-          tidalId,
-          title:    d.title || '—',
-          artist:   artistStr,
-          albumArt: artURL,
-          album:    d.album?.title || d.album?.name || '',
-          duration: d.duration || null,
-        };
-      }
-    } catch (_) { /* use defaults */ }
-
-    // Also try Spotify for richer metadata (album art may be higher quality)
-    try {
-      const r = await fetch(`/api/spotify/track/${spotifyId}`);
-      if (r.ok) {
-        const meta = await r.json();
-        if (meta.name && !meta.error) {
-          seedTrack.title    = meta.name;
-          seedTrack.artist   = meta.artists?.map(a => a.name).join(', ') || seedTrack.artist;
-          seedTrack.albumArt = meta.album?.images?.[0]?.url || seedTrack.albumArt;
-          seedTrack.album    = meta.album?.name || seedTrack.album;
-        }
-      }
-    } catch (_) { /* Spotify optional — not fatal */ }
-
-    // 3. Load recommendations → radio queue
-    showToast('Building radio…');
-    const recResp = await fetch(`/api/recommendations/${tidalId}`);
-    if (!recResp.ok) throw new Error('Could not get recommendations');
-    const recData   = await recResp.json();
-    const recTracks = normaliseRecommendations(recData, tidalId);
-
-    // 4. Build queue: seed track first, then recommendations
+    const { seedTrack, recTracks, stationName } = await buildPandoraRadio(spotifyId);
     state.queue      = [seedTrack, ...recTracks];
     state.queueIndex = -1;
-
-    renderQueue((seedTrack.title !== '—' ? seedTrack.title : 'Track') + ' Radio');
+    renderQueue(stationName);
     setLoadingState(false);
-    showToast('Radio ready — playing now ✦');
-
-    // Auto-play first track
+    showToast('Pandora radio ready ✦');
     playQueueItem(0);
-
   } catch (e) {
     setLoadingState(false);
     showToast(e.message || 'Something went wrong', true, 5000);
@@ -386,70 +398,26 @@ async function loadSpotifyUrl() {
   }
 }
 
-// ── Build track object from Spotify metadata ──────────────────────────────────
-function buildTrackFromSpotify(meta, tidalId) {
-  if (!meta) return { tidalId, title: '—', artist: '—', albumArt: null, album: '—' };
-  return {
-    tidalId,
-    title:    meta.name,
-    artist:   meta.artists?.map(a => a.name).join(', ') || '—',
-    albumArt: meta.album?.images?.[0]?.url || null,
-    album:    meta.album?.name || '—',
-    duration: meta.duration_ms ? meta.duration_ms / 1000 : null,
-  };
-}
-
-// ── Normalise recommendation data from monochrome.tf ─────────────────────────
-// Response format: { version, data: { limit, offset, totalNumberOfItems, items: [{track: {...}}, ...] } }
-function normaliseRecommendations(data, seedId) {
-  let rawItems = [];
-
-  // Primary format: data.data.items (each item wraps a .track)
-  if (data?.data?.items && Array.isArray(data.data.items)) {
-    rawItems = data.data.items;
-  } else if (Array.isArray(data?.data)) {
-    rawItems = data.data;
-  } else if (Array.isArray(data?.items)) {
-    rawItems = data.items;
-  } else if (Array.isArray(data)) {
-    rawItems = data;
-  } else {
-    const arr = Object.values(data || {}).find(v => Array.isArray(v));
-    if (arr) rawItems = arr;
-  }
-
-  return rawItems
-    .map(item => {
-      // Unwrap {track: {...}} wrapper if present
-      const t = item?.track || item;
-      if (!t || !t.id) return null;
-      if (t.id === seedId) return null;
-
-      // Artist(s)
-      const artists = t.artists || (t.artist ? [t.artist] : []);
-      const artistName = Array.isArray(artists)
-        ? artists.filter(a => !a.type || a.type === 'MAIN').map(a => a.name || a).join(', ')
-          || artists.map(a => a.name || a).join(', ')
-        : (typeof artists === 'string' ? artists : (t.artist?.name || '—'));
-
-      const cover = t.album?.cover || t.album?.imagePath || t.cover || null;
-      return {
-        tidalId:  t.id,
-        title:    t.title || t.name || '—',
-        artist:   artistName || '—',
-        albumArt: tidalCoverUrl(cover),
-        album:    t.album?.title || t.album?.name || '',
-        duration: t.duration || null,
-      };
-    })
-    .filter(Boolean);
-}
+// (Pandora flow — normaliseRecommendations no longer needed)
 
 // ── Play a queue item by index ────────────────────────────────────────────────
 async function playQueueItem(index) {
   if (index < 0 || index >= state.queue.length) return;
   const track = state.queue[index];
   state.queueIndex = index;
+
+  // Track came from Pandora but wasn't resolved to Tidal yet — do it now
+  if (track._needsResolve) {
+    try {
+      showToast(`Finding "${track.title}" on Tidal…`);
+      const resolved = await resolveToTidal(track.artist, track.title);
+      Object.assign(track, resolved);
+      delete track._needsResolve;
+    } catch (e) {
+      showToast(`Skipping "${track.title}" — not on Tidal`, true);
+      return playNext();
+    }
+  }
 
   // If track is missing key metadata, fetch from Tidal
   if (!track.albumArt || !track.title || track.title === '—' || !track.artist || track.artist === '—') {
@@ -531,21 +499,41 @@ async function loadDashJs() {
   });
 }
 
-// ── Start radio from a specific Tidal track ────────────────────────────────────
+// ── Start radio from a queue track (Pandora station from its artist+title) ─────
 async function startRadioFromTidal(tidalId, triggerTrack) {
+  if (!triggerTrack.artist || !triggerTrack.title || triggerTrack.title === '—') {
+    showToast('Not enough metadata to build a Pandora station', true);
+    return;
+  }
   setLoadingState(true);
-  showToast('Building new radio…');
+  showToast('Building Pandora radio…');
 
   try {
-    const recResp = await fetch(`/api/recommendations/${tidalId}`);
-    if (!recResp.ok) throw new Error('Could not get recommendations');
-    const recData  = await recResp.json();
-    const recTracks = normaliseRecommendations(recData, tidalId);
+    const params      = new URLSearchParams({ artist: triggerTrack.artist, title: triggerTrack.title });
+    const pandoraResp = await fetch(`/api/pandora-radio?${params}`);
+    if (!pandoraResp.ok) {
+      const e = await pandoraResp.json().catch(() => ({}));
+      throw new Error(e.error || 'Pandora radio failed');
+    }
+    const pandoraData = await pandoraResp.json();
+    const stationName = pandoraData.stationName || `${triggerTrack.title} Radio`;
+
+    showToast(`Resolving ${pandoraData.tracks.length} tracks on Tidal…`);
+    const resolved = await Promise.allSettled(
+      pandoraData.tracks.map(t => resolveToTidal(t.artist, t.title))
+    );
+
+    const recTracks = resolved
+      .map((r, i) => {
+        if (r.status === 'fulfilled') return r.value;
+        const t = pandoraData.tracks[i];
+        return { tidalId: null, title: t.title, artist: t.artist, albumArt: t.albumArt, album: t.album, duration: t.duration, _needsResolve: true };
+      })
+      .filter(t => t.tidalId !== null || t._needsResolve);
 
     state.queue      = [triggerTrack, ...recTracks];
     state.queueIndex = -1;
-
-    renderQueue(triggerTrack.title + ' Radio');
+    renderQueue(stationName);
     setLoadingState(false);
     showToast('New radio ready ✦');
     playQueueItem(0);
