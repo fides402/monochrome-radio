@@ -15,13 +15,16 @@ exports.handler = async (event) => {
   }
 
   try {
-    // 1. iTunes search (free, no auth)
-    const itunesResp = await axios.get('https://itunes.apple.com/search', {
-      params: { term: `${artist} ${title}`, entity: 'song', limit: 3 },
-      timeout: 10000,
-    });
-    const itunesTrack = (itunesResp.data?.results || [])
-      .find(t => t.trackViewUrl) || null;
+    // 1. iTunes search (free, no auth) — try full query first, then title-only
+    let itunesTrack = null;
+    for (const term of [`${artist} ${title}`, title]) {
+      const itunesResp = await axios.get('https://itunes.apple.com/search', {
+        params: { term, entity: 'song', limit: 5 },
+        timeout: 10000,
+      }).catch(() => null);
+      itunesTrack = (itunesResp?.data?.results || []).find(t => t.trackViewUrl) || null;
+      if (itunesTrack) break;
+    }
 
     if (!itunesTrack) {
       return { statusCode: 404, headers: CORS, body: JSON.stringify({ error: 'Not found on iTunes' }) };

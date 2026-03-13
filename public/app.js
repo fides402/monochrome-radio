@@ -18,16 +18,17 @@ function fmtDuration(secs) {
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const state = {
-  queue:        [],          // Array of Tidal track objects
-  queueIndex:   -1,
-  currentTrack: null,        // { tidalId, title, artist, albumArt, quality }
-  isPlaying:    false,
-  isShuffle:    false,
-  repeatMode:   'off',       // 'off' | 'one' | 'all'
-  volume:       0.8,
-  isMuted:      false,
-  isLoading:    false,
-  liked:        new Set(),
+  queue:           [],          // Array of Tidal track objects
+  queueIndex:      -1,
+  currentTrack:    null,        // { tidalId, title, artist, albumArt, quality }
+  isPlaying:       false,
+  isShuffle:       false,
+  repeatMode:      'off',       // 'off' | 'one' | 'all'
+  volume:          0.8,
+  isMuted:         false,
+  isLoading:       false,
+  liked:           new Set(),
+  isExpandingQueue: false,      // guard against concurrent expansions
 };
 
 // ── Audio engine ──────────────────────────────────────────────────────────────
@@ -256,6 +257,9 @@ function playNext() {
       else return;
     }
   }
+  // Auto-expand queue when 3 or fewer tracks remain
+  const remaining = state.queue.length - 1 - idx;
+  if (remaining <= 3) maybeExpandQueue();
   playQueueItem(idx);
 }
 
@@ -264,6 +268,44 @@ function playPrev() {
   let idx = state.queueIndex - 1;
   if (idx < 0) idx = state.repeatMode === 'all' ? state.queue.length - 1 : 0;
   playQueueItem(idx);
+}
+
+// ── Infinite queue: auto-expand when near the end ────────────────────────────
+async function maybeExpandQueue() {
+  if (state.isExpandingQueue) return;
+  // Use the current track (or last resolved track) as seed
+  const seed = state.currentTrack || state.queue.find(t => t.tidalId && !t._needsResolve);
+  if (!seed?.artist || !seed?.title) return;
+  state.isExpandingQueue = true;
+  try {
+    const params = new URLSearchParams({ artist: seed.artist, title: seed.title });
+    const resp   = await fetch(`/api/pandora-radio?${params}`);
+    if (!resp.ok) return;
+    const data   = await resp.json();
+    // Deduplicate against current queue by artist+title
+    const existingKeys = new Set(
+      state.queue.map(t => `${t.artist}|${t.title}`.toLowerCase())
+    );
+    const newTracks = (data.tracks || []).filter(t => {
+      const k = `${t.artist}|${t.title}`.toLowerCase();
+      return !existingKeys.has(k);
+    });
+    if (!newTracks.length) return;
+    // Resolve to Tidal in background
+    const resolved = await Promise.allSettled(newTracks.map(t => resolveToTidal(t.artist, t.title)));
+    const toAdd = resolved
+      .map((r, i) => r.status === 'fulfilled'
+        ? r.value
+        : { tidalId: null, ...newTracks[i], _needsResolve: true })
+      .filter(t => t.tidalId !== null || t._needsResolve);
+    if (!toAdd.length) return;
+    state.queue.push(...toAdd);
+    renderQueue(null); // re-render to show new tracks
+    showToast(`+${toAdd.length} new tracks added`);
+  } catch (_) {
+  } finally {
+    state.isExpandingQueue = false;
+  }
 }
 
 // ── Shuffle / Repeat ──────────────────────────────────────────────────────────
@@ -601,7 +643,7 @@ async function startRadioFromTidal(tidalId, triggerTrack) {
 
 // ── Render queue list ─────────────────────────────────────────────────────────
 function renderQueue(radioTitle) {
-  el.queueTitle.textContent    = radioTitle || 'Radio Queue';
+  if (radioTitle !== null) el.queueTitle.textContent = radioTitle || 'Radio Queue';
   el.queueSubtitle.textContent = `${state.queue.length} tracks`;
   el.queueList.innerHTML       = '';
 
