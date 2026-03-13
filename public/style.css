@@ -772,8 +772,56 @@ html, body {
 }
 
 @media (max-width: 700px) {
+  :root {
+    --player-h: 128px;
+    --header-h: 56px;
+  }
+
+  /* Hide sidebar/queue; use full width for now-playing */
   .main { grid-template-columns: 1fr; }
   .queue { display: none; }
-  .player { grid-template-columns: 1fr 2fr; }
+
+  /* Header: hide logo text, shrink padding */
+  .header { padding: 0 12px; gap: 10px; }
+  .logo-text { display: none; }
+  .logo svg { width: 24px; height: 24px; }
+  .search-input { font-size: 13px; }
+  .search-btn { padding: 0 14px; font-size: 13px; }
+
+  /* Now-playing: tighter */
+  .np-content { max-width: 100%; padding: 0 16px; }
+  .np-art-wrap { width: 180px; height: 180px; }
+  .np-title { font-size: 18px; }
+  .np-artist { font-size: 13px; }
+
+  /* Player: stack vertically */
+  .player {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto;
+    padding: 0 12px;
+    gap: 4px;
+    height: var(--player-h);
+    align-content: center;
+  }
+  .player-left { min-width: 0; }
+  .player-info { gap: 8px; }
+  .player-info .art { width: 40px; height: 40px; border-radius: 4px; }
+  .player-info .track-name { font-size: 13px; }
+  .player-info .track-artist { font-size: 11px; }
   .player-right { display: none; }
+
+  /* Controls row: tighter */
+  .player-controls { gap: 16px; }
+  .ctrl-btn { width: 28px; height: 28px; font-size: 14px; }
+  .play-btn  { width: 36px; height: 36px; font-size: 16px; }
+
+  /* Progress bar: full width */
+  .player-progress { gap: 6px; }
+  .time { width: 30px; font-size: 10px; }
+}
+
+@media (max-width: 400px) {
+  .np-art-wrap { width: 140px; height: 140px; }
+  .np-title { font-size: 16px; }
+  .player-controls { gap: 10px; }
 }

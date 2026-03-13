@@ -35,8 +35,10 @@ exports.handler = async (event) => {
       }
 
       if (track.manifestMimeType === 'application/dash+xml') {
-        // Chrome MSE does NOT support FLAC codec in DASH — skip and try lower quality
-        if (/codecs="flac"/i.test(decoded)) continue;
+        // Chrome MSE only supports AAC (mp4a.40.x) and Opus in DASH.
+        // Skip FLAC, ALAC, Dolby AC3/EC3, and any other codec not on the whitelist.
+        const codecMatch = decoded.match(/codecs="([^"]+)"/i);
+        if (!codecMatch || !/mp4a\.40|opus/i.test(codecMatch[1])) continue;
 
         // Only rewrite actual media URLs inside initialization= and media= attributes.
         // Other http:// occurrences are XML namespace URIs and must NOT be proxied.

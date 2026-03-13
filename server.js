@@ -168,6 +168,9 @@ app.get('/api/stream-info/:tidalId', async (req, res) => {
       }
 
       if (track.manifestMimeType === 'application/dash+xml') {
+        // Skip codecs Chrome MSE doesn't support (FLAC, ALAC, Dolby AC3/EC3)
+        const codecMatch = decoded.match(/codecs="([^"]+)"/i);
+        if (!codecMatch || !/mp4a\.40|opus/i.test(codecMatch[1])) continue;
         // Serve the manifest with URLs rewritten to go through our segment proxy
         const rewritten = decoded.replace(
           /https?:\/\/[^\s"<>]+/g,
