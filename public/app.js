@@ -187,9 +187,11 @@ audio.addEventListener('ended', () => {
 });
 audio.addEventListener('error', e => {
   const err = audio.error;
+  // Ignore ABORTED (code 1) — fired when we intentionally change tracks
+  if (!err || err.code === 1) return;
   const codes = ['', 'ABORTED', 'NETWORK', 'DECODE', 'SRC_NOT_SUPPORTED'];
-  console.error('[Audio error]', err?.code, codes[err?.code], err?.message, audio.src);
-  showToast(`Audio error (${codes[err?.code] || err?.code}) — skipping…`, true);
+  console.error('[Audio error]', err.code, codes[err.code], err.message, audio.src);
+  showToast(`Audio error (${codes[err.code] || err.code}) — skipping…`, true);
   setTimeout(playNext, 1500);
 });
 
@@ -571,47 +573,48 @@ async function playQueueItem(index) {
   updatePlayerUI();
   markActiveTrack();
 
-  // Stop any existing playback
+  // Stop any existing playback — do NOT set audio.src='' as it triggers
+  // a spurious SRC_NOT_SUPPORTED error that cascades into a false skip.
   audio.pause();
-  audio.src = '';
   if (dashPlayer) { try { dashPlayer.reset(); } catch(_){} dashPlayer = null; }
 
   setLoadingState(true);
 
+  // Fetch stream info — on any failure, silently skip to next track
+  let info;
   try {
-    // Get stream info
-    const r    = await fetch(`/api/stream-info/${track.tidalId}`);
-    if (!r.ok) throw new Error(`Stream error: ${r.status}`);
-    const info = await r.json();
-    if (info.error) throw new Error(info.error);
+    const r = await fetch(`/api/stream-info/${track.tidalId}`);
+    if (!r.ok) { setLoadingState(false); return playNext(); }
+    info = await r.json();
+    if (info.error) { setLoadingState(false); return playNext(); }
+  } catch (_) {
+    setLoadingState(false);
+    return playNext();
+  }
 
-    track.quality = info.quality;
-    if (info.bitDepth)   track.bitDepth   = info.bitDepth;
-    if (info.sampleRate) track.sampleRate = info.sampleRate;
-    updatePlayerUI();
+  track.quality = info.quality;
+  if (info.bitDepth)   track.bitDepth   = info.bitDepth;
+  if (info.sampleRate) track.sampleRate = info.sampleRate;
+  updatePlayerUI();
 
+  try {
     if (info.type === 'direct') {
-      // Use URL directly from stream-info (avoids a second round-trip)
       audio.src = info.url;
       audio.load();
       await audio.play();
     } else if (info.type === 'dash') {
-      // DASH stream via dash.js
       await loadDashJs();
       const blob    = new Blob([info.xml], { type: 'application/dash+xml' });
       const blobUrl = URL.createObjectURL(blob);
       dashPlayer    = window.dashjs.MediaPlayer().create();
       dashPlayer.initialize(audio, blobUrl, true);
       state.isPlaying = true;
-    } else {
-      throw new Error('Unknown stream type');
     }
-
     setLoadingState(false);
   } catch (e) {
+    // audio.play() threw (AbortError, NotAllowedError, etc.) — not a skip-worthy error
     setLoadingState(false);
-    showToast('Failed to load: ' + e.message, true);
-    console.error('[playQueueItem]', e);
+    console.error('[playQueueItem play]', e.name, e.message);
   }
 }
 
