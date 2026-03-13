@@ -2,7 +2,8 @@ const axios = require('axios');
 
 exports.handler = async (event) => {
   const headers = { 'Access-Control-Allow-Origin': '*' };
-  const { spotifyId } = event.queryStringParameters || {};
+  const spotifyId = event.queryStringParameters?.spotifyId
+    || (event.path || '').split('/').filter(Boolean).pop();
   if (!spotifyId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing spotifyId' }) };
 
   try {

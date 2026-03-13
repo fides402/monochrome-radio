@@ -25,7 +25,9 @@ async function getToken() {
 
 exports.handler = async (event) => {
   const headers = { 'Access-Control-Allow-Origin': '*' };
-  const { spotifyId } = event.queryStringParameters || {};
+  // Support both ?spotifyId= query param (Netlify redirect) and last path segment fallback
+  const spotifyId = event.queryStringParameters?.spotifyId
+    || (event.path || '').split('/').filter(Boolean).pop();
   if (!spotifyId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing spotifyId' }) };
 
   try {

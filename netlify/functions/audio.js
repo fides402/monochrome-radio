@@ -9,7 +9,8 @@ const MONO_BASE     = 'https://api.monochrome.tf';
 const QUALITY_CHAIN = ['HI_RES_LOSSLESS', 'LOSSLESS', 'HIGH', 'LOW'];
 
 exports.handler = async (event) => {
-  const { tidalId } = event.queryStringParameters || {};
+  const tidalId = event.queryStringParameters?.tidalId
+    || (event.path || '').split('/').filter(Boolean).pop();
   if (!tidalId) {
     return { statusCode: 400, body: JSON.stringify({ error: 'Missing tidalId' }) };
   }

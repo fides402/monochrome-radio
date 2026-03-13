@@ -4,7 +4,8 @@ const MONO_BASE = 'https://api.monochrome.tf';
 
 exports.handler = async (event) => {
   const headers = { 'Access-Control-Allow-Origin': '*' };
-  const { tidalId } = event.queryStringParameters || {};
+  const tidalId = event.queryStringParameters?.tidalId
+    || (event.path || '').split('/').filter(Boolean).pop();
   if (!tidalId) return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing tidalId' }) };
 
   try {
