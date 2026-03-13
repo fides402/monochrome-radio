@@ -184,10 +184,13 @@ exports.handler = async (event) => {
 
     const playlistBody = { stationToken: station.stationToken, includeTrackLength: true,
                            userAuthToken: session.userToken };
-    const [pl1, pl2] = await Promise.all([
-      pandoraPost('station.getPlaylist', { ...playlistBody, syncTime: syncNow(session) }, params, true),
-      pandoraPost('station.getPlaylist', { ...playlistBody, syncTime: syncNow(session) }, params, true),
-    ]);
+    // Sequential calls — Pandora may reject parallel requests on same station token
+    const pl1 = await pandoraPost('station.getPlaylist', { ...playlistBody, syncTime: syncNow(session) }, params, true);
+    await new Promise(r => setTimeout(r, 800));
+    const pl2 = await pandoraPost('station.getPlaylist', { ...playlistBody, syncTime: syncNow(session) }, params, true);
+
+    // Log raw item count for debugging
+    console.log('[pandora] pl1 items:', (pl1.items||[]).length, 'pl2 items:', (pl2.items||[]).length);
 
     const allItems = [...(pl1.items || []), ...(pl2.items || [])];
     const tracks   = allItems.filter(t => t.songTitle && t.artistName).map(t => ({
