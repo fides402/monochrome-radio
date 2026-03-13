@@ -288,8 +288,8 @@ el.playerHeart.addEventListener('click', () => {
 // ── Parse Spotify URL → track ID ─────────────────────────────────────────────
 function parseSpotifyId(input) {
   input = input.trim();
-  // Full URL: https://open.spotify.com/track/TRACK_ID?...
-  let m = input.match(/spotify\.com\/track\/([A-Za-z0-9]+)/);
+  // Full URL: https://open.spotify.com/track/ID or /intl-it/track/ID etc.
+  let m = input.match(/\/track\/([A-Za-z0-9]{22})/);
   if (m) return m[1];
   // URI: spotify:track:TRACK_ID
   m = input.match(/spotify:track:([A-Za-z0-9]+)/);
