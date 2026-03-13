@@ -190,27 +190,17 @@ exports.handler = async (event) => {
     const pl2 = await pandoraPost('station.getPlaylist', { ...playlistBody, syncTime: syncNow(session) }, params, true);
 
     const allItems = [...(pl1.items || []), ...(pl2.items || [])];
-    console.log('[pandora] total items:', allItems.length, 'first:', JSON.stringify(allItems[0]).slice(0,200));
 
-    // Try multiple known field name variants
+    // Pandora uses "songName" (not "songTitle") in getPlaylist responses
     const tracks = allItems
-      .filter(t => (t.songTitle || t.title || t.song_title) && (t.artistName || t.artist || t.artist_name))
+      .filter(t => t.songName && t.artistName)
       .map(t => ({
-        artist:   t.artistName  || t.artist     || t.artist_name,
-        title:    t.songTitle   || t.title       || t.song_title,
-        album:    t.albumName   || t.album       || null,
-        albumArt: t.albumArtUrl || t.albumArtUrl || null,
-        duration: t.trackLength || t.duration    || null,
+        artist:   t.artistName,
+        title:    t.songName,
+        album:    t.albumName   || null,
+        albumArt: t.albumArtUrl || null,
+        duration: t.trackLength || null,
       }));
-
-    // If still nothing, return raw debug info
-    if (tracks.length === 0 && allItems.length > 0) {
-      const sample = allItems[0];
-      return { statusCode: 200, headers: CORS, body: JSON.stringify({
-        stationName: station.stationName, tracks: [],
-        _debug: { keys: Object.keys(sample), sample: JSON.stringify(sample).slice(0, 500) }
-      })};
-    }
 
     const seen = new Set();
     const unique = tracks.filter(t => {
