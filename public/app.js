@@ -270,51 +270,75 @@ function playPrev() {
   playQueueItem(idx);
 }
 
-// ── Infinite queue: auto-expand when near the end ────────────────────────────
+// ── Infinite queue ────────────────────────────────────────────────────────────
+// Target: always keep at least QUEUE_MIN tracks ahead of the current position.
+const QUEUE_MIN = 8;
+
+// Tracks we've already used as Pandora seeds (avoid repeating the same station)
+const usedSeedKeys = new Set();
+
 async function maybeExpandQueue() {
   if (state.isExpandingQueue) return;
+  // How many tracks are ahead of the cursor?
+  const ahead = state.queue.length - 1 - state.queueIndex;
+  if (ahead >= QUEUE_MIN) return; // already enough buffered
   state.isExpandingQueue = true;
   try {
-    // Pick a random resolved track from the queue as seed (more variety than always using current)
-    const resolved = state.queue.filter(t => t.artist && t.title && !t._needsResolve);
-    if (!resolved.length) return;
-    const seed = resolved[Math.floor(Math.random() * resolved.length)];
-
     const existingKeys = new Set(state.queue.map(t => `${t.artist}|${t.title}`.toLowerCase()));
 
-    // Try up to 2 different seeds to get fresh tracks
-    let toAdd = [];
-    const seeds = [seed];
-    if (state.currentTrack && state.currentTrack !== seed) seeds.unshift(state.currentTrack);
-    for (const s of seeds) {
-      const params = new URLSearchParams({ artist: s.artist, title: s.title });
-      const resp   = await fetch(`/api/pandora-radio?${params}`);
-      if (!resp.ok) continue;
-      const data   = await resp.json();
-      const newTracks = (data.tracks || []).filter(t => {
+    // Build candidate seed pool: prefer unused seeds; fall back to any resolved track
+    const allResolved = state.queue.filter(t => t.artist && t.title && !t._needsResolve);
+    if (!allResolved.length) return;
+    const unused = allResolved.filter(t => !usedSeedKeys.has(`${t.artist}|${t.title}`.toLowerCase()));
+    const pool   = unused.length ? unused : allResolved;
+
+    // Pick 2 random seeds (different from each other) for parallel Pandora requests
+    const shuffled = pool.slice().sort(() => Math.random() - 0.5);
+    const seeds = shuffled.slice(0, 2);
+
+    // Fire both Pandora requests in parallel
+    const pandoraResults = await Promise.allSettled(
+      seeds.map(s => {
+        usedSeedKeys.add(`${s.artist}|${s.title}`.toLowerCase());
+        return fetch(`/api/pandora-radio?${new URLSearchParams({ artist: s.artist, title: s.title })}`)
+          .then(r => r.ok ? r.json() : null);
+      })
+    );
+
+    // Collect all unique new tracks across both results
+    const newTracks = [];
+    for (const pr of pandoraResults) {
+      if (pr.status !== 'fulfilled' || !pr.value?.tracks) continue;
+      for (const t of pr.value.tracks) {
         const k = `${t.artist}|${t.title}`.toLowerCase();
-        if (existingKeys.has(k)) return false;
-        existingKeys.add(k); // prevent cross-seed dupes
-        return true;
-      });
-      const res = await Promise.allSettled(newTracks.map(t => resolveToTidal(t.artist, t.title)));
-      const batch = res
-        .map((r, i) => r.status === 'fulfilled'
-          ? r.value
-          : { tidalId: null, ...newTracks[i], _needsResolve: true })
-        .filter(t => t.tidalId !== null || t._needsResolve);
-      toAdd = toAdd.concat(batch);
-      if (toAdd.length >= 5) break; // enough new tracks
+        if (!existingKeys.has(k)) { existingKeys.add(k); newTracks.push(t); }
+      }
     }
+
+    if (!newTracks.length) return;
+
+    // Resolve all to Tidal in parallel
+    const res = await Promise.allSettled(newTracks.map(t => resolveToTidal(t.artist, t.title)));
+    const toAdd = res
+      .map((r, i) => r.status === 'fulfilled'
+        ? r.value
+        : { tidalId: null, ...newTracks[i], _needsResolve: true })
+      .filter(t => t.tidalId !== null || t._needsResolve);
+
     if (!toAdd.length) return;
     state.queue.push(...toAdd);
     renderQueue(null);
-    showToast(`+${toAdd.length} new tracks added`);
+    showToast(`+${toAdd.length} tracks added to queue`);
   } catch (_) {
   } finally {
     state.isExpandingQueue = false;
   }
 }
+
+// Background watchdog: check every 15 seconds and expand if needed
+setInterval(() => {
+  if (state.queue.length && state.queueIndex >= 0) maybeExpandQueue();
+}, 15000);
 
 // ── Shuffle / Repeat ──────────────────────────────────────────────────────────
 el.shuffleBtn.addEventListener('click', () => {
