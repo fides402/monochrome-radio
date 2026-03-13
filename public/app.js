@@ -314,13 +314,44 @@ async function resolveToTidal(artist, title) {
 async function buildPandoraRadio(spotifyId) {
   // 1. Fetch Spotify metadata (title + artist needed for Pandora search)
   showToast('Getting track info…');
+  let artist, title, meta = null;
   const metaResp = await fetch(`/api/spotify/track/${spotifyId}`);
-  if (!metaResp.ok) throw new Error('Could not fetch Spotify track info');
-  const meta = await metaResp.json();
-  if (meta.error) throw new Error(meta.error.message || 'Spotify error');
+  if (metaResp.ok) {
+    meta = await metaResp.json();
+    if (meta.error) meta = null;
+  }
 
-  const artist = meta.artists?.map(a => a.name).join(', ') || '—';
-  const title  = meta.name || '—';
+  if (meta) {
+    artist = meta.artists?.map(a => a.name).join(', ') || '—';
+    title  = meta.name || '—';
+  } else {
+    // Spotify failed — resolve via song.link first to at least get Tidal ID,
+    // then pull title/artist from Tidal metadata
+    showToast('Spotify unavailable, using song.link…');
+    const resolveResp = await fetch(`/api/resolve/${spotifyId}`);
+    if (!resolveResp.ok) throw new Error('Track not found — check the Spotify link');
+    const { tidalId } = await resolveResp.json();
+    const infoResp = await fetch(`/api/tidal-info/${tidalId}`);
+    const info = infoResp.ok ? await infoResp.json() : {};
+    const d = info.data || info;
+    const artists = d.artists || (d.artist ? [d.artist] : []);
+    artist = Array.isArray(artists) ? artists.map(a => a.name || a).join(', ') : (d.artist?.name || '—');
+    title  = d.title || '—';
+    const cover = d.album?.cover || d.cover;
+    return {
+      seedTrack: {
+        tidalId,
+        title,
+        artist,
+        albumArt: cover ? tidalCoverUrl(cover, 640) : null,
+        album:    d.album?.title || '',
+        duration: d.duration || null,
+      },
+      recTracks:   [],
+      stationName: `${title} Radio`,
+      _skipPandora: { artist, title },
+    };
+  }
 
   // 2. Resolve seed track to Tidal
   showToast('Finding on Tidal…');
@@ -328,7 +359,7 @@ async function buildPandoraRadio(spotifyId) {
   try {
     seedTrack = await resolveToTidal(artist, title);
   } catch (_) {
-    // Fallback: use Spotify art + try song.link directly
+    // Fallback: song.link directly
     const resolveResp = await fetch(`/api/resolve/${spotifyId}`);
     if (!resolveResp.ok) throw new Error('Track not found on Tidal');
     const { tidalId } = await resolveResp.json();
@@ -384,7 +415,26 @@ async function loadSpotifyUrl() {
 
   setLoadingState(true);
   try {
-    const { seedTrack, recTracks, stationName } = await buildPandoraRadio(spotifyId);
+    let { seedTrack, recTracks, stationName, _skipPandora } = await buildPandoraRadio(spotifyId);
+
+    // If Spotify was unavailable we still have artist+title — build Pandora station now
+    if (_skipPandora && recTracks.length === 0) {
+      showToast('Building Pandora radio…');
+      const pandoraParams = new URLSearchParams(_skipPandora);
+      const pandoraResp   = await fetch(`/api/pandora-radio?${pandoraParams}`);
+      if (pandoraResp.ok) {
+        const pandoraData = await pandoraResp.json();
+        stationName = pandoraData.stationName || stationName;
+        showToast(`Resolving ${pandoraData.tracks.length} tracks on Tidal…`);
+        const resolved = await Promise.allSettled(
+          pandoraData.tracks.map(t => resolveToTidal(t.artist, t.title))
+        );
+        recTracks = resolved
+          .map((r, i) => r.status === 'fulfilled' ? r.value : { tidalId: null, ...pandoraData.tracks[i], _needsResolve: true })
+          .filter(t => t.tidalId !== null || t._needsResolve);
+      }
+    }
+
     state.queue      = [seedTrack, ...recTracks];
     state.queueIndex = -1;
     renderQueue(stationName);

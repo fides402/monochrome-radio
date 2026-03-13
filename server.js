@@ -98,7 +98,9 @@ app.get('/api/spotify/track/:id', async (req, res) => {
     );
     res.json(resp.data);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    const detail = e.response?.data?.error?.message || e.message;
+    console.error('[Spotify]', detail);
+    res.status(e.response?.status || 500).json({ error: detail });
   }
 });
 
