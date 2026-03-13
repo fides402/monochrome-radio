@@ -257,9 +257,9 @@ function playNext() {
       else return;
     }
   }
-  // Auto-expand queue when 3 or fewer tracks remain
+  // Auto-expand queue when 5 or fewer tracks remain
   const remaining = state.queue.length - 1 - idx;
-  if (remaining <= 3) maybeExpandQueue();
+  if (remaining <= 5) maybeExpandQueue();
   playQueueItem(idx);
 }
 
@@ -273,34 +273,42 @@ function playPrev() {
 // ── Infinite queue: auto-expand when near the end ────────────────────────────
 async function maybeExpandQueue() {
   if (state.isExpandingQueue) return;
-  // Use the current track (or last resolved track) as seed
-  const seed = state.currentTrack || state.queue.find(t => t.tidalId && !t._needsResolve);
-  if (!seed?.artist || !seed?.title) return;
   state.isExpandingQueue = true;
   try {
-    const params = new URLSearchParams({ artist: seed.artist, title: seed.title });
-    const resp   = await fetch(`/api/pandora-radio?${params}`);
-    if (!resp.ok) return;
-    const data   = await resp.json();
-    // Deduplicate against current queue by artist+title
-    const existingKeys = new Set(
-      state.queue.map(t => `${t.artist}|${t.title}`.toLowerCase())
-    );
-    const newTracks = (data.tracks || []).filter(t => {
-      const k = `${t.artist}|${t.title}`.toLowerCase();
-      return !existingKeys.has(k);
-    });
-    if (!newTracks.length) return;
-    // Resolve to Tidal in background
-    const resolved = await Promise.allSettled(newTracks.map(t => resolveToTidal(t.artist, t.title)));
-    const toAdd = resolved
-      .map((r, i) => r.status === 'fulfilled'
-        ? r.value
-        : { tidalId: null, ...newTracks[i], _needsResolve: true })
-      .filter(t => t.tidalId !== null || t._needsResolve);
+    // Pick a random resolved track from the queue as seed (more variety than always using current)
+    const resolved = state.queue.filter(t => t.artist && t.title && !t._needsResolve);
+    if (!resolved.length) return;
+    const seed = resolved[Math.floor(Math.random() * resolved.length)];
+
+    const existingKeys = new Set(state.queue.map(t => `${t.artist}|${t.title}`.toLowerCase()));
+
+    // Try up to 2 different seeds to get fresh tracks
+    let toAdd = [];
+    const seeds = [seed];
+    if (state.currentTrack && state.currentTrack !== seed) seeds.unshift(state.currentTrack);
+    for (const s of seeds) {
+      const params = new URLSearchParams({ artist: s.artist, title: s.title });
+      const resp   = await fetch(`/api/pandora-radio?${params}`);
+      if (!resp.ok) continue;
+      const data   = await resp.json();
+      const newTracks = (data.tracks || []).filter(t => {
+        const k = `${t.artist}|${t.title}`.toLowerCase();
+        if (existingKeys.has(k)) return false;
+        existingKeys.add(k); // prevent cross-seed dupes
+        return true;
+      });
+      const res = await Promise.allSettled(newTracks.map(t => resolveToTidal(t.artist, t.title)));
+      const batch = res
+        .map((r, i) => r.status === 'fulfilled'
+          ? r.value
+          : { tidalId: null, ...newTracks[i], _needsResolve: true })
+        .filter(t => t.tidalId !== null || t._needsResolve);
+      toAdd = toAdd.concat(batch);
+      if (toAdd.length >= 5) break; // enough new tracks
+    }
     if (!toAdd.length) return;
     state.queue.push(...toAdd);
-    renderQueue(null); // re-render to show new tracks
+    renderQueue(null);
     showToast(`+${toAdd.length} new tracks added`);
   } catch (_) {
   } finally {
