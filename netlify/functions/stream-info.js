@@ -35,10 +35,15 @@ exports.handler = async (event) => {
       }
 
       if (track.manifestMimeType === 'application/dash+xml') {
-        // Rewrite segment URLs to go through our segment proxy (relative URL = works on all hosts)
+        // Only rewrite actual media URLs inside initialization= and media= attributes.
+        // Other http:// occurrences are XML namespace URIs and must NOT be proxied.
+        // Also decode HTML entities (&amp; → &) before URL-encoding.
         const rewritten = decoded.replace(
-          /https?:\/\/[^\s"<>]+/g,
-          u => `/api/segment?url=${encodeURIComponent(u)}`
+          /((?:initialization|media)=")([^"]+)(")/g,
+          (_, attr, rawUrl, end) => {
+            const url = rawUrl.replace(/&amp;/g, '&');
+            return `${attr}/api/segment?url=${encodeURIComponent(url)}${end}`;
+          }
         );
         return {
           statusCode: 200,

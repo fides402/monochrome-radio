@@ -184,12 +184,14 @@ exports.handler = async (event) => {
 
     const playlistBody = { stationToken: station.stationToken, includeTrackLength: true,
                            userAuthToken: session.userToken };
-    // Sequential calls — Pandora may reject parallel requests on same station token
+    // Sequential calls with delay — parallel requests on same station token are rejected
     const pl1 = await pandoraPost('station.getPlaylist', { ...playlistBody, syncTime: syncNow(session) }, params, true);
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 600));
     const pl2 = await pandoraPost('station.getPlaylist', { ...playlistBody, syncTime: syncNow(session) }, params, true);
+    await new Promise(r => setTimeout(r, 600));
+    const pl3 = await pandoraPost('station.getPlaylist', { ...playlistBody, syncTime: syncNow(session) }, params, true);
 
-    const allItems = [...(pl1.items || []), ...(pl2.items || [])];
+    const allItems = [...(pl1.items || []), ...(pl2.items || []), ...(pl3.items || [])];
 
     // Pandora uses "songName" (not "songTitle") in getPlaylist responses
     const tracks = allItems
