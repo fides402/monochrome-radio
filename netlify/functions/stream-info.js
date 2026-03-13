@@ -35,6 +35,9 @@ exports.handler = async (event) => {
       }
 
       if (track.manifestMimeType === 'application/dash+xml') {
+        // Chrome MSE does NOT support FLAC codec in DASH — skip and try lower quality
+        if (/codecs="flac"/i.test(decoded)) continue;
+
         // Only rewrite actual media URLs inside initialization= and media= attributes.
         // Other http:// occurrences are XML namespace URIs and must NOT be proxied.
         // Also decode HTML entities (&amp; → &) before URL-encoding.
